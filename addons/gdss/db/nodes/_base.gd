@@ -162,8 +162,14 @@ func bind_canvas_item(canvas_item: Node) -> void:
 	events.append_array(get_default_events())
 	for event: String in events:
 		# has_signal guard: Window-derived nodes lack some Control signals (item_rect_changed).
+		# CONNECT_DEFERRED: item_rect_changed/visibility_changed can fire as a direct side
+		# effect of _update_state's own override application (a stylebox border/padding/
+		# font_size change alters the node's rect), which would otherwise re-enter
+		# _update_state synchronously - an unbounded stack recursion (not just a wasted
+		# re-apply) once enough GDSS-enabled nodes are nested. Deferring breaks the
+		# synchronous chain: each firing runs on a fresh, flat call stack at idle time.
 		if not canvas_item.is_connected(event, _update_state):
-			canvas_item.connect(event, _update_state, CONNECT_APPEND_SOURCE_OBJECT)
+			canvas_item.connect(event, _update_state, CONNECT_DEFERRED | CONNECT_APPEND_SOURCE_OBJECT)
 
 
 func unbind_canvas_item(canvas_item: Node) -> void:
@@ -286,7 +292,12 @@ func get_style_props() -> Array[GdssProp]:
 
 
 func _update_state(...a: Array) -> void:
-	update_state(a.get(a.size() - 1))
+	# CONNECT_DEFERRED (see bind_canvas_item) means this can fire on a later idle
+	# frame, after the node it targets has since been freed (e.g. in test teardown).
+	var canvas_item: Variant = a.get(a.size() - 1)
+	if not is_instance_valid(canvas_item):
+		return
+	update_state(canvas_item)
 
 
 func update_state(canvas_item: Node) -> void:
